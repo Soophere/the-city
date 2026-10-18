@@ -1,0 +1,71 @@
+# The city's front door (LiteLLM proxy).
+#
+# One job name per pool — `runner`, `thinker`, `coder` — and several free NVIDIA
+# workers behind each, so a job is served by whichever worker is healthy and
+# fast, not by one hard-coded model. Membership comes from the census roster
+# (data/roster.json): a worker is listed only after it
+# really answered a probe.
+#
+# Timeouts are per worker and reflect its own measured latency: a worker that
+# takes 88 s to answer gets 600 s of patience, a fast one gets 120 s. Nothing
+# here is global.
+
+model_list:
+  # ── runner: fast general workers (measured 0.5–3.5 s) ──────────────────────
+  - model_name: runner
+    litellm_params: { model: nvidia_nim/poolside/laguna-xs-2.1, api_key: os.environ/NVIDIA_NIM_API_KEY, timeout: 120 }
+  - model_name: runner
+    litellm_params: { model: nvidia_nim/openai/gpt-oss-20b, api_key: os.environ/NVIDIA_NIM_API_KEY, timeout: 120 }
+  - model_name: runner
+    litellm_params: { model: nvidia_nim/nvidia/nemotron-3-super-120b-a12b, api_key: os.environ/NVIDIA_NIM_API_KEY, timeout: 120 }
+  # Recovered by the 10-minute re-probe after the 5-minute pass called it empty.
+  - model_name: runner
+    litellm_params: { model: nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b, api_key: os.environ/NVIDIA_NIM_API_KEY, timeout: 300 }
+  - model_name: runner
+    litellm_params: { model: nvidia_nim/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning, api_key: os.environ/NVIDIA_NIM_API_KEY, timeout: 180 }
+  - model_name: runner
+    litellm_params: { model: nvidia_nim/mistralai/mistral-nemotron, api_key: os.environ/NVIDIA_NIM_API_KEY, timeout: 180 }
+  - model_name: runner
+    litellm_params: { model: nvidia_nim/meta/llama-3.2-11b-vision-instruct, api_key: os.environ/NVIDIA_NIM_API_KEY, timeout: 180 }
+
+  # ── thinker: slow, patient, deep (measured 88–300 s) ───────────────────────
+  - model_name: thinker
+    litellm_params: { model: nvidia_nim/deepseek-ai/deepseek-v4-flash-0731, api_key: os.environ/NVIDIA_NIM_API_KEY, timeout: 600 }
+  - model_name: thinker
+    litellm_params: { model: nvidia_nim/nvidia/nemotron-3.5-lightning-30b-a3b, api_key: os.environ/NVIDIA_NIM_API_KEY, timeout: 600 }
+  - model_name: thinker
+    litellm_params: { model: nvidia_nim/moonshotai/kimi-k3, api_key: os.environ/NVIDIA_NIM_API_KEY, timeout: 900 }
+  - model_name: thinker
+    litellm_params: { model: nvidia_nim/z-ai/glm-5.3, api_key: os.environ/NVIDIA_NIM_API_KEY, timeout: 900 }
+
+  # ── coder: provisional until the tool-use test picks the real members ──────
+  - model_name: coder
+    litellm_params: { model: nvidia_nim/nvidia/nemotron-3-super-120b-a12b, api_key: os.environ/NVIDIA_NIM_API_KEY, timeout: 300 }
+  - model_name: coder
+    litellm_params: { model: nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b, api_key: os.environ/NVIDIA_NIM_API_KEY, timeout: 300 }
+  - model_name: coder
+    litellm_params: { model: nvidia_nim/openai/gpt-oss-20b, api_key: os.environ/NVIDIA_NIM_API_KEY, timeout: 300 }
+  - model_name: coder
+    litellm_params: { model: nvidia_nim/mistralai/mistral-nemotron, api_key: os.environ/NVIDIA_NIM_API_KEY, timeout: 300 }
+
+router_settings:
+  # Prefer whichever worker in the pool has been answering fastest.
+  routing_strategy: latency-based-routing
+  num_retries: 2
+  timeout: 120
+  allowed_fails: 2
+  cooldown_time: 60
+  enable_pre_call_checks: true
+  # A pool with every worker cooling down falls back to the patient pool.
+  fallbacks:
+    - runner: [thinker]
+    - coder: [thinker]
+
+litellm_settings:
+  # Free workers reject unknown fields; drop what the provider does not accept.
+  drop_params: true
+  request_timeout: 900
+  # Exact-match answer cache: the same question is never paid for twice.
+  cache: true
+  cache_params:
+    type: local
